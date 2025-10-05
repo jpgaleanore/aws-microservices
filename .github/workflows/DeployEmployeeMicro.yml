@@ -8,18 +8,29 @@ on:
       - main
 
 env:
-  # Setting an environment variable with the value of a configuration variable
   ECR_BACKEND_IMAGE_EMPLOYEE: ${{ vars.ECR_BACKEND_IMAGE_EMPLOYEE }}
   AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
   ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
   ECS_BACKEND_SERVICE: ${{ vars.ECS_BACKEND_SERVICE }}
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest Git tag
+        id: get_tag
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Show detected tag
+        run: echo "Using tag ${{ steps.get_tag.outputs.tag }}"
 
       - name: Set up QEMU for arm64
         run: |
@@ -51,13 +62,9 @@ jobs:
           cd microservices/employee
           docker buildx create --use
           docker buildx inspect --bootstrap
-          docker buildx build --platform linux/arm64 -t ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_BACKEND_IMAGE_EMPLOYEE:latest --push .
 
-#      - name: Deploy to ECS
-#        uses: imehedi/actions-awscli-v2@latest
-#        with:
-#          args: ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_BACKEND_SERVICE }} --force-new-deployment
-#        env:
-#          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-#          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-#          AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
+          VERSION=${{ steps.get_tag.outputs.tag }}
+          IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_BACKEND_IMAGE_EMPLOYEE
+
+          echo "Building image $IMAGE:$VERSION"
+          docker buildx build --platform linux/arm64 -t $IMAGE:$VERSION -t $IMAGE:latest --push .
