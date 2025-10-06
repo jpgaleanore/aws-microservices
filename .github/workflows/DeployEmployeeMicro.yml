@@ -20,7 +20,7 @@ jobs:
       ecs_cluster: ${{ vars.ECS_CLUSTER }}
       ecs_service: ${{ vars.ECS_BACKEND_SERVICE }}
       aws_region: ${{ vars.AWS_DEFAULT_REGION }}
-      deploy_to_ecs: false  # Cambiar a true cuando quieras desplegar a ECS
+      deploy_to_ecs: false
     secrets:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
