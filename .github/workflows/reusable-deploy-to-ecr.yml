@@ -1,0 +1,184 @@
+name: Reusable Deploy to ECR and ECS
+
+on:
+  workflow_call:
+    inputs:
+      microservice_name:
+        description: 'Name of the microservice (customer, employee, etc.)'
+        required: true
+        type: string
+      microservice_path:
+        description: 'Path to the microservice directory'
+        required: true
+        type: string
+      ecr_image_name:
+        description: 'ECR image repository name'
+        required: true
+        type: string
+      ecs_cluster:
+        description: 'ECS cluster name'
+        required: false
+        type: string
+        default: ''
+      ecs_service:
+        description: 'ECS service name'
+        required: false
+        type: string
+        default: ''
+      aws_region:
+        description: 'AWS region'
+        required: true
+        type: string
+      deploy_to_ecs:
+        description: 'Whether to deploy to ECS or just build and push to ECR'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      AWS_ACCOUNT_ID:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_SESSION_TOKEN:
+        required: false
+      GITREPO_TOKEN:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump version and push new tag
+        id: bump_version
+        uses: anothrNick/github-tag-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITREPO_TOKEN }}
+          WITH_V: true
+          DEFAULT_BUMP: patch
+          RELEASE_BRANCHES: main
+          VERBOSE: true
+          INITIAL_VERSION: 0.0.0
+          MAJOR_STRING_TOKEN: "BREAKING CHANGE:"
+          MINOR_STRING_TOKEN: "feat"
+          PATCH_STRING_TOKEN: "fix"
+          NONE_STRING_TOKEN: "chore,docs,style,refactor,test"
+          BRANCH_HISTORY: last
+          TAG_CONTEXT: repo
+
+      - name: Show new version
+        run: |
+          echo "Microservice: ${{ inputs.microservice_name }}"
+          echo "New Version Generated: ${{ steps.bump_version.outputs.new_tag }}"
+          echo "Tag: ${{ steps.bump_version.outputs.tag }}"
+          echo "Previous Tag: ${{ steps.bump_version.outputs.old_tag }}"
+          echo "Part bumped: ${{ steps.bump_version.outputs.part }}"
+
+      - name: Set up QEMU for arm64
+        run: |
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+        if: runner.os == 'Linux'
+
+      - name: Set up Docker for arm64
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region ${{ inputs.aws_region }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com
+
+      - name: Build and push Docker image
+        run: |
+          cd ${{ inputs.microservice_path }}
+          docker buildx create --use
+          docker buildx inspect --bootstrap
+
+          VERSION=${{ steps.bump_version.outputs.new_tag }}
+          IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com/${{ inputs.ecr_image_name }}
+
+          echo "Building and publishing image $IMAGE:$VERSION"
+          docker buildx build --platform linux/arm64 \
+            -t $IMAGE:$VERSION \
+            -t $IMAGE:latest \
+            --push .
+          
+          echo "Image successfully pushed with tags:"
+          echo "   - $IMAGE:latest"
+          echo "   - $IMAGE:$VERSION"
+
+      - name: Update ECS task definition
+        if: ${{ inputs.deploy_to_ecs }}
+        run: |
+          echo "Updating ECS task definition..."
+          
+          # Obtener la task definition actual
+          TASK_DEFINITION=$(aws ecs describe-task-definition \
+            --task-definition ${{ inputs.ecs_service }} \
+            --region ${{ inputs.aws_region }})
+          
+          VERSION=${{ steps.bump_version.outputs.new_tag }}
+          IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com/${{ inputs.ecr_image_name }}:$VERSION
+          
+          # Crear nueva revisión con la imagen versionada
+          NEW_TASK_DEF=$(echo $TASK_DEFINITION | jq --arg IMAGE "$IMAGE" \
+            '.taskDefinition | 
+            .containerDefinitions[0].image = $IMAGE | 
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+          
+          # Registrar la nueva task definition
+          echo $NEW_TASK_DEF > task-def.json
+          aws ecs register-task-definition \
+            --cli-input-json file://task-def.json \
+            --region ${{ inputs.aws_region }}
+          
+          echo "Task definition updated with image $IMAGE"
+
+      - name: Deploy to ECS
+        if: ${{ inputs.deploy_to_ecs }}
+        run: |
+          echo "Deploying to ECS..."
+          aws ecs update-service \
+            --cluster ${{ inputs.ecs_cluster }} \
+            --service ${{ inputs.ecs_service }} \
+            --force-new-deployment \
+            --region ${{ inputs.aws_region }}
+          
+          echo "ECS service update initiated"
+
+      - name: Deployment summary
+        run: |
+          echo "════════════════════════════════════════════════════════"
+          echo "Deployment completed successfully!"
+          echo "════════════════════════════════════════════════════════"
+          echo "Microservice: ${{ inputs.microservice_name }}"
+          echo "Version: ${{ steps.bump_version.outputs.new_tag }}"
+          echo "Git Tag: ${{ steps.bump_version.outputs.tag }}"
+          echo "Docker Image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com/${{ inputs.ecr_image_name }}:${{ steps.bump_version.outputs.new_tag }}"
+          echo "Region: ${{ inputs.aws_region }}"
+          if [ "${{ inputs.deploy_to_ecs }}" == "true" ]; then
+            echo "ECS Cluster: ${{ inputs.ecs_cluster }}"
+            echo "ECS Service: ${{ inputs.ecs_service }}"
+          fi
+          echo "════════════════════════════════════════════════════════"
+
