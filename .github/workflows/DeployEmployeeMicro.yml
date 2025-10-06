@@ -35,7 +35,6 @@ jobs:
           DEFAULT_BUMP: patch
           RELEASE_BRANCHES: main
           VERBOSE: true
-          CUSTOM_TAG: "fix=patch,feat=minor,BREAKING CHANGE=major,chore=none,docs=none,test=none,refactor=none"
 
       - name: Show new version
         run: |
