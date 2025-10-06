@@ -7,12 +7,15 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 env:
-  # Setting an environment variable with the value of a configuration variable
   ECR_BACKEND_IMAGE: ${{ vars.ECR_BACKEND_IMAGE }}
   AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
   ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
   ECS_BACKEND_SERVICE: ${{ vars.ECS_BACKEND_SERVICE }}
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -20,6 +23,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Bump version and push new tag
+        id: bump_version
+        uses: anothrNick/github-tag-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITREPO_TOKEN }}
+          WITH_V: true
+          DEFAULT_BUMP: patch
+          RELEASE_BRANCHES: main
+          VERBOSE: true
+          INITIAL_VERSION: 0.0.0
+          MAJOR_STRING_TOKEN: "BREAKING CHANGE:"
+          MINOR_STRING_TOKEN: "feat"
+          PATCH_STRING_TOKEN: "fix"
+          NONE_STRING_TOKEN: "chore,docs,style,refactor,test"
+          BRANCH_HISTORY: last
+
+      - name: Show new version
+        run: |
+          echo "New Version Generated: ${{ steps.bump_version.outputs.new_tag }}"
+          echo "Tag: ${{ steps.bump_version.outputs.tag }}"
+          echo "Previous Tag: ${{ steps.bump_version.outputs.old_tag }}"
+          echo "Part bumped: ${{ steps.bump_version.outputs.part }}"
 
       - name: Set up QEMU for arm64
         run: |
@@ -48,10 +76,15 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          cd microservices/customer
+          cd microservices/employee
           docker buildx create --use
           docker buildx inspect --bootstrap
-          docker buildx build --platform linux/arm64 -t ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_BACKEND_IMAGE:latest --push .
+
+          VERSION=${{ steps.bump_version.outputs.new_tag }}
+          IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_BACKEND_IMAGE
+
+          echo "Build and publis new image $IMAGE:$VERSION"
+          docker buildx build --platform linux/arm64 -t $IMAGE:$VERSION -t $IMAGE:latest --push .
 
 #      - name: Deploy to ECS
 #        uses: imehedi/actions-awscli-v2@latest
