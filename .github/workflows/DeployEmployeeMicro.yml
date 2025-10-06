@@ -35,11 +35,19 @@ jobs:
           DEFAULT_BUMP: patch
           RELEASE_BRANCHES: main
           VERBOSE: true
+          INITIAL_VERSION: 0.0.0
+          MAJOR_STRING_TOKEN: "BREAKING CHANGE:"
+          MINOR_STRING_TOKEN: "feat"
+          PATCH_STRING_TOKEN: "fix"
+          NONE_STRING_TOKEN: "chore,docs,style,refactor,test"
+          BRANCH_HISTORY: last
 
       - name: Show new version
         run: |
           echo "New Version Generated: ${{ steps.bump_version.outputs.new_tag }}"
           echo "Tag: ${{ steps.bump_version.outputs.tag }}"
+          echo "Previous Tag: ${{ steps.bump_version.outputs.old_tag }}"
+          echo "Part bumped: ${{ steps.bump_version.outputs.part }}"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
