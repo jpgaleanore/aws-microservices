@@ -7,6 +7,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 env:
   ECR_BACKEND_IMAGE_EMPLOYEE: ${{ vars.ECR_BACKEND_IMAGE_EMPLOYEE }}
   AWS_DEFAULT_REGION: ${{ vars.AWS_DEFAULT_REGION }}
@@ -28,17 +31,28 @@ jobs:
         uses: anothrNick/github-tag-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITREPO_TOKEN }}
-          DEFAULT_BUMP: patch
           WITH_V: true
+          DEFAULT_BUMP: patch
+          RELEASE_BRANCHES: main
+          PRERELEASE: false
+          VERBOSE: true
 
-      - name: Get latest Git tag
-        id: get_tag
+      - name: Show new version
         run: |
-          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "New Version Generated: ${{ steps.bump_version.outputs.new_tag }}"
+          echo "Tag: ${{ steps.bump_version.outputs.tag }}"
 
-      - name: Show detected tag
-        run: echo "Using tag ${{ steps.get_tag.outputs.tag }}"
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
 
       - name: Set up QEMU for arm64
         run: |
@@ -53,26 +67,14 @@ jobs:
       - name: Set up Docker
         uses: docker/setup-buildx-action@v3
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
-
-      - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-
       - name: Build and push Docker image
         run: |
           cd microservices/employee
           docker buildx create --use
           docker buildx inspect --bootstrap
 
-          VERSION=${{ steps.get_tag.outputs.tag }}
+          VERSION=${{ steps.bump_version.outputs.new_tag }}
           IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_BACKEND_IMAGE_EMPLOYEE
 
-          echo "Building image $IMAGE:$VERSION"
+          echo "Build and publis new image $IMAGE:$VERSION"
           docker buildx build --platform linux/arm64 -t $IMAGE:$VERSION -t $IMAGE:latest --push .
